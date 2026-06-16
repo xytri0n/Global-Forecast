@@ -60,15 +60,16 @@ body {
 .icon-btn {
   cursor: pointer;
   font-size: 28px;
-  transition: transform 0.2s;
   padding: 8px;
   border-radius: 50%;
   background: var(--card);
   border: 1px solid var(--glass-border);
+  -webkit-tap-highlight-color: transparent; /* Removes blue highlight on mobile */
+  user-select: none;
+  transition: background 0.2s;
 }
 
 .icon-btn:hover {
-  transform: rotate(45deg);
   background: var(--card-hover);
 }
 
@@ -101,8 +102,10 @@ body {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%) scale(0.9);
-  width: 90%;
-  max-width: 360px;
+  width: 85%;
+  max-width: 400px;
+  max-height: 85vh;
+  overflow-y: auto;
   background: var(--card);
   backdrop-filter: blur(15px);
   -webkit-backdrop-filter: blur(15px);
@@ -124,7 +127,7 @@ body {
 }
 
 .modal-header h2 { margin: 0; font-size: 20px; }
-.modal-header .material-symbols-outlined { cursor: pointer; color: var(--muted); }
+.modal-header .material-symbols-outlined { cursor: pointer; color: var(--muted); -webkit-tap-highlight-color: transparent; }
 .modal-header .material-symbols-outlined:hover { color: #ff4d4d; }
 
 .settings-modal label {
@@ -162,6 +165,7 @@ body {
   border-radius: 12px;
   cursor: pointer;
   transition: background 0.2s;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .settings-modal button:hover { background: #3b8ce0; }
@@ -371,6 +375,20 @@ body {
         <div class="sub" id="uvDesc">--</div>
       </div>
       <div class="detail-box">
+        <div class="title"><span class="material-symbols-outlined">explore</span> Wind</div>
+        <div class="value" id="windDir">--</div>
+        <div class="sub" id="windSpeed">--</div>
+      </div>
+      <div class="detail-box">
+        <div class="title"><span class="material-symbols-outlined">visibility</span> Visibility</div>
+        <div class="value" id="visibility">--</div>
+      </div>
+      <div class="detail-box">
+        <div class="title"><span class="material-symbols-outlined">compress</span> Pressure</div>
+        <div class="value" id="pressure">--</div>
+        <div class="sub">hPa</div>
+      </div>
+      <div class="detail-box">
         <div class="title"><span class="material-symbols-outlined">wb_twilight</span> Sunrise</div>
         <div class="value" id="sunrise">--:--</div>
       </div>
@@ -386,13 +404,10 @@ body {
 // --- PWA SERVICE WORKER REGISTRATION ---
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').then(reg => {
-      console.log('PWA Service Worker registered!', reg);
-    }).catch(err => console.error('Service Worker registration failed:', err));
+    navigator.serviceWorker.register('./sw.js').catch(err => console.error('SW Error:', err));
   });
 }
 
-// --- NOTIFICATION PERMISSION ---
 document.addEventListener('DOMContentLoaded', () => {
   if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
     Notification.requestPermission();
@@ -402,13 +417,7 @@ document.addEventListener('DOMContentLoaded', () => {
 let unit = "C";
 let windUnit = "kmh";
 let city = "";
-let lastNotifiedWeatherCode = null; // Prevents spamming notifications
-
-function setTheme() {
-  let h = new Date().getHours();
-  document.body.classList.toggle("light", h >= 7 && h <= 18);
-}
-setTheme();
+let lastNotifiedWeatherCode = null;
 
 function openSettings() {
   let modal = document.getElementById("settings");
@@ -438,7 +447,10 @@ function applySettings() {
   if (city) { loadCity(city); } 
   else {
     navigator.geolocation.getCurrentPosition(
-      pos => loadWeather(pos.coords.latitude, pos.coords.longitude),
+      async pos => {
+        let realCityName = await getCityFromCoords(pos.coords.latitude, pos.coords.longitude);
+        loadWeather(pos.coords.latitude, pos.coords.longitude, realCityName);
+      },
       () => loadCity("London")
     );
   }
@@ -460,17 +472,19 @@ slider.addEventListener('mousemove', (e) => {
   slider.scrollLeft = scrollLeft - walk;
 });
 
-function icon(code) {
+// Icon logic optimized for Day/Night
+function icon(code, isNight = false) {
   const map = {
-    0: "clear_day", 1: "partly_cloudy_day", 2: "partly_cloudy_day", 3: "cloud",
+    0: isNight ? "clear_night" : "clear_day", 
+    1: isNight ? "partly_cloudy_night" : "partly_cloudy_day", 
+    2: isNight ? "partly_cloudy_night" : "partly_cloudy_day", 
+    3: "cloud",
     45: "foggy", 48: "foggy", 51: "rainy_light", 53: "rainy_light", 55: "rainy",
     56: "weather_mix", 57: "weather_mix", 61: "rainy", 63: "rainy", 65: "water_drop",
     66: "weather_snowy_rainy", 67: "weather_snowy_rainy", 71: "cloudy_snowing", 
     73: "snowing", 75: "weather_snowy", 77: "ac_unit", 80: "rainy", 81: "rainy", 
     82: "storm", 85: "cloudy_snowing", 86: "snowing", 95: "thunderstorm", 
-    96: "thunderstorm", 99: "severe_cold", 
-    // Added tornado mapping for WMO codes that signify extreme conditions or generic extreme fallback
-    100: "tornado" 
+    96: "thunderstorm", 99: "severe_cold", 100: "tornado" 
   };
   return map[code] || "cloud";
 }
@@ -501,14 +515,34 @@ function formatTime(isoString) {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+// Convert wind direction degrees to compass direction
+function getWindDir(degrees) {
+  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return directions[Math.round(degrees / 45) % 8];
+}
+
 window.onload = () => {
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
-      pos => loadWeather(pos.coords.latitude, pos.coords.longitude),
+      async pos => {
+        let realCityName = await getCityFromCoords(pos.coords.latitude, pos.coords.longitude);
+        loadWeather(pos.coords.latitude, pos.coords.longitude, realCityName);
+      },
       () => loadCity("New York")
     );
   } else { loadCity("New York"); }
 };
+
+// Reverse Geocoding API (Free, no key needed)
+async function getCityFromCoords(lat, lon) {
+  try {
+    let res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
+    let data = await res.json();
+    return data.city || data.locality || "Your Location";
+  } catch (e) {
+    return "Your Location";
+  }
+}
 
 async function loadCity(searchCity) {
   document.getElementById("cityName").innerText = "Searching...";
@@ -531,7 +565,8 @@ async function loadWeather(lat, lon, name = "Your Location") {
   let tUnit = unit === "F" ? "fahrenheit" : "celsius";
   let wUnit = windUnit === "mph" ? "mph" : "kmh";
 
-  let weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&hourly=temperature_2m,weathercode,dew_point_2m&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,wind_speed_10m_max&temperature_unit=${tUnit}&wind_speed_unit=${wUnit}&timezone=auto`;
+  // Optimized to pull surface_pressure, visibility, and wind_direction_10m
+  let weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,surface_pressure,visibility,wind_direction_10m&hourly=temperature_2m,weathercode,dew_point_2m&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,wind_speed_10m_max&temperature_unit=${tUnit}&wind_speed_unit=${wUnit}&timezone=auto`;
   let aqiUrl = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&current=us_aqi&timezone=auto`;
 
   try {
@@ -546,24 +581,37 @@ async function loadWeather(lat, lon, name = "Your Location") {
   }
 }
 
-function sendWeatherNotification(title, body) {
-  if ("Notification" in window && Notification.permission === "granted") {
-    new Notification(title, { body: body, icon: "icon.png" });
-  }
-}
-
 function renderUI(data, aqiData) {
   let temp = Math.round(data.current.temperature_2m);
   let code = data.current.weather_code;
   
-  document.getElementById("icon").innerText = icon(code);
+  let now = new Date();
+  let sunrise = new Date(data.daily.sunrise[0]);
+  let sunset = new Date(data.daily.sunset[0]);
+  
+  // Theme Switching based on Actual Sunset/Sunrise
+  let isCurrentlyNight = now < sunrise || now >= sunset;
+  if (!isCurrentlyNight) {
+    document.body.classList.add("light");
+  } else {
+    document.body.classList.remove("light");
+  }
+  
+  document.getElementById("icon").innerText = icon(code, isCurrentlyNight);
   document.getElementById("temp").innerText = temp + "°" + unit;
   document.getElementById("status").innerText = weatherText(code);
 
   document.getElementById("feelsLike").innerText = Math.round(data.current.apparent_temperature) + "°";
   document.getElementById("humidity").innerText = data.current.relative_humidity_2m + "%";
-  document.getElementById("dewPoint").innerText = "Dew point: " + Math.round(data.hourly.dew_point_2m[new Date().getHours()]) + "°";
+  document.getElementById("dewPoint").innerText = "Dew point: " + Math.round(data.hourly.dew_point_2m[now.getHours()]) + "°";
   
+  // New details
+  document.getElementById("pressure").innerText = Math.round(data.current.surface_pressure);
+  let vis = data.current.visibility / 1000; // convert meters to km/miles
+  document.getElementById("visibility").innerText = vis >= 10 ? "10+" + (unit === "C" ? " km" : " mi") : vis.toFixed(1) + (unit === "C" ? " km" : " mi");
+  document.getElementById("windDir").innerText = getWindDir(data.current.wind_direction_10m);
+  document.getElementById("windSpeed").innerText = Math.round(data.current.wind_speed_10m) + " " + windUnit;
+
   let uvMax = data.daily.uv_index_max[0];
   document.getElementById("uv").innerText = uvMax;
   document.getElementById("uvDesc").innerText = uvMax <= 2 ? "Low" : uvMax <= 5 ? "Moderate" : uvMax <= 7 ? "High" : "Extreme";
@@ -580,13 +628,22 @@ function renderUI(data, aqiData) {
 
   let hourlyBox = document.getElementById("hourly");
   hourlyBox.innerHTML = "";
-  let now = new Date().getHours();
-  for (let i = now; i < now + 24; i++) {
-    let displayTime = i === now ? "Now" : (i % 24 >= 12 ? (i%24 === 12 ? 12 : i%24 - 12) + " PM" : (i%24 === 0 ? 12 : i%24) + " AM");
+  let currentHourIndex = now.getHours();
+  
+  let srHour = sunrise.getHours();
+  let ssHour = sunset.getHours();
+
+  for (let i = currentHourIndex; i < currentHourIndex + 24; i++) {
+    let loopHour = i % 24;
+    let displayTime = i === currentHourIndex ? "Now" : (loopHour >= 12 ? (loopHour === 12 ? 12 : loopHour - 12) + " PM" : (loopHour === 0 ? 12 : loopHour) + " AM");
+    
+    // Check if this specific hour in the loop is night time
+    let isHourlyNight = loopHour < srHour || loopHour >= ssHour;
+
     hourlyBox.innerHTML += `
       <div class="hour">
         <div style="font-size: 13px; font-weight: bold;">${displayTime}</div>
-        <span class="material-symbols-outlined" style="color: var(--accent);">${icon(data.hourly.weathercode[i])}</span>
+        <span class="material-symbols-outlined" style="color: var(--accent);">${icon(data.hourly.weathercode[i], isHourlyNight)}</span>
         <div style="font-size: 18px; font-weight: bold;">${Math.round(data.hourly.temperature_2m[i])}°</div>
       </div>`;
   }
@@ -597,7 +654,7 @@ function renderUI(data, aqiData) {
     dailyBox.innerHTML += `
       <div class="day">
         <div class="left">
-          <span class="material-symbols-outlined">${icon(data.daily.weather_code[i])}</span>
+          <span class="material-symbols-outlined">${icon(data.daily.weather_code[i], false)}</span>
           <span>${getDayName(i)}</span>
         </div>
         <div class="center-temp">
@@ -609,7 +666,6 @@ function renderUI(data, aqiData) {
       </div>`;
   }
 
-  // --- SEVERE WEATHER ALERTS & NOTIFICATIONS ---
   let alertBox = document.getElementById("alertBox");
   let isSevere = (code >= 80 || code === 65 || code === 67 || code === 75 || code >= 95);
   
@@ -618,14 +674,13 @@ function renderUI(data, aqiData) {
     let alertMsg = `Severe Weather: ${weatherText(code)}`;
     alertBox.innerHTML = `⚠ ${alertMsg}`;
     
-    // Only send notification if we haven't notified for this specific weather code during this session
-    if (lastNotifiedWeatherCode !== code) {
-      sendWeatherNotification("Weather Pro+ Alert ⛈️", alertMsg);
+    if (lastNotifiedWeatherCode !== code && "Notification" in window && Notification.permission === "granted") {
+      new Notification("Global Forecast Alert ⛈️", { body: alertMsg });
       lastNotifiedWeatherCode = code;
     }
   } else {
     alertBox.style.display = "none";
-    lastNotifiedWeatherCode = null; // Reset if weather clears up
+    lastNotifiedWeatherCode = null;
   }
 }
 </script>
