@@ -1,7 +1,7 @@
 {
   "name": "Global Forecast",
-  "short_name": "Forecast",
-  "description": "Your Global weather application.",
+  "short_name": "Global Forecast",
+  "description": "Your global weather app for real-time conditions, hourly updates, and accurate forecasts anywhere in the world.",
   "start_url": "/index.html",
   "display": "standalone",
   "background_color": "#0b1220",
