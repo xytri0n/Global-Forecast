@@ -525,13 +525,20 @@ window.onload = () => {
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       async pos => {
-        let realCityName = await getCityFromCoords(pos.coords.latitude, pos.coords.longitude);
-        loadWeather(pos.coords.latitude, pos.coords.longitude, realCityName);
+        let realCityName = await getCityFromCoords(
+          pos.coords.latitude,
+          pos.coords.longitude
+        );
+        loadWeather(
+          pos.coords.latitude,
+          pos.coords.longitude,
+          realCityName
+        );
       },
-      () => loadCity("Philadelphia, Pennsylvania")
+      () => loadCity("Philadelphia")
     );
   } else {
-    loadCity("Philadelphia, Pennsylvania");
+    loadCity("Philadelphia");
   }
 };
 
