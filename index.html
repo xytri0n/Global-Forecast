@@ -528,9 +528,11 @@ window.onload = () => {
         let realCityName = await getCityFromCoords(pos.coords.latitude, pos.coords.longitude);
         loadWeather(pos.coords.latitude, pos.coords.longitude, realCityName);
       },
-      () => loadCity("New York")
+      () => loadCity("Philadelphia, Pennsylvania")
     );
-  } else { loadCity("New York"); }
+  } else {
+    loadCity("Philadelphia, Pennsylvania");
+  }
 };
 
 // Reverse Geocoding API (Free, no key needed)
